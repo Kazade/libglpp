@@ -38,6 +38,22 @@ static AlignedStack<Mat4, MAX_STACK_DEPTH> PROJECTION_STACK;
 static AlignedStack<Mat4, MAX_STACK_DEPTH> TEXTURE_STACK;
 AlignedStack<Mat4, MAX_STACK_DEPTH>* CURRENT_STACK = &MODELVIEW_STACK;
 
+static void _load_identity(Mat4& out) {
+    static const float IDENTITY[4][4] = {
+        {1, 0, 0, 0},
+        {0, 1, 0, 0},
+        {0, 0, 1, 0},
+        {0, 0, 0, 1}
+    };
+
+    std::memcpy(&out.m, IDENTITY, sizeof(float) * 16);
+}
+
+static Mat4 VIEWPORT_TRANSFORM;
+
+/* Concatenation of the MODELVIEW, PROJECTION and VIEWPORT_TRANSFORM matrices */
+static Mat4 RENDER_TRANSFORM;
+
 static std::vector<PVRCommand> OPAQUE_LIST;
 static std::vector<PVRCommand> TRANSPARENT_LIST;
 static std::vector<PVRCommand> MULTITEXTURE_LIST;
@@ -48,12 +64,12 @@ static GLboolean IN_IMMEDIATE_MODE_BLOCK = false;
 static GLenum IMMEDIATE_MODE_POLYGON_TYPE = GL_TRIANGLES;
 static std::vector<float> IMMEDIATE_MODE_VERTEX_DATA;
 
-static const float IDENTITY[4][4] = {
-    {1, 0, 0, 0},
-    {0, 1, 0, 0},
-    {0, 0, 1, 0},
-    {0, 0, 0, 1}
-};
+static struct Viewport {
+    GLint x;
+    GLint y;
+    GLsizei width;
+    GLsizei height;
+} VIEWPORT;
 
 static struct ContextState {
     float clear_colour [3] = {0.5f, 0.5f, 0.5f};
@@ -103,15 +119,28 @@ static bool _multitexture_coords_enabled() {
     return (ENABLED_CLIENT_STATE & ATTRIBUTE_ARRAY_TEXCOORD1) == ATTRIBUTE_ARRAY_TEXCOORD1;
 }
 
+static void _prepare_render_matrix() {
+    mat_load(&VIEWPORT_TRANSFORM.m);
+    mat_apply(&PROJECTION_STACK.top().m);
+    mat_apply(&MODELVIEW_STACK.top().m);
+    mat_store(&RENDER_TRANSFORM.m);
+}
+
 void APIENTRY glInitContextDC() {
     ENABLED_CLIENT_STATE = 0;
     ERROR = GL_NO_ERROR;
     ENABLED_CLIENT_STATE = 0;
     POINT_SPRITES_ENABLED = GL_FALSE;
 
-    MODELVIEW_STACK.push(IDENTITY);
-    PROJECTION_STACK.push(IDENTITY);
-    TEXTURE_STACK.push(IDENTITY);
+    Mat4 identity;
+
+    _load_identity(identity);
+    _load_identity(VIEWPORT_TRANSFORM);
+    _load_identity(RENDER_TRANSFORM);
+
+    MODELVIEW_STACK.push(identity);
+    PROJECTION_STACK.push(identity);
+    TEXTURE_STACK.push(identity);
 
     /* Reserve 32k of space in each list initially */
     OPAQUE_LIST.reserve(1024);
@@ -206,6 +235,22 @@ void APIENTRY glClear(GLuint mode) {
     }
 }
 
+void APIENTRY glViewport(GLint x, GLint y, GLsizei width, GLsizei height) {
+    VIEWPORT.x = x;
+    VIEWPORT.y = y;
+    VIEWPORT.width = width;
+    VIEWPORT.height = height;
+
+    auto& vt = VIEWPORT_TRANSFORM.m;
+
+    vt[0][0] = GLfloat(width) * 0.5f;
+    vt[1][1] = -(GLfloat(height) * 0.5f);
+    vt[2][2] = 1.0f;
+
+    vt[3][0] = vt[0][0] + GLfloat(x);
+    vt[3][1] = vid_mode->height - (vt[1][1] + GLfloat(x));
+}
+
 void APIENTRY glMatrixMode(GLenum mode) {
     switch(mode) {
         case GL_MODELVIEW:
@@ -223,7 +268,7 @@ void APIENTRY glMatrixMode(GLenum mode) {
 }
 
 void APIENTRY glLoadIdentity() {
-    std::memcpy(&CURRENT_STACK->top().m, &IDENTITY, sizeof(IDENTITY));
+    _load_identity(CURRENT_STACK->top());
 }
 
 void APIENTRY glLoadMatrixf(const GLfloat *m) {
@@ -253,7 +298,9 @@ void APIENTRY glLoadTransposeMatrixf(const GLfloat *m) {
 }
 
 void APIENTRY glMultMatrixf(const GLfloat *m) {
-
+    mat_load(&CURRENT_STACK->top().m);
+    mat_apply((GLfloat(*)[4][4]) m);
+    mat_store(&CURRENT_STACK->top().m);
 }
 
 void APIENTRY glMultTransposeMatrixf(const GLfloat *m) {
@@ -386,15 +433,15 @@ static void handle_vertex(pvr_vertex_t& vout, uint32_t i) {
     const auto offset = i * VERTEX_POINTER.stride;
     T* ptr = (T*) (VERTEX_POINTER.pointer + offset);
 
-    vout.x = (float) *(ptr++);
-    vout.y = (float) *(ptr++);
-    vout.z = (float) (VERTEX_POINTER.size > 2) ? *(ptr++) : 0;
+    float x = (float) *(ptr++);
+    float y = (float) *(ptr++);
+    float z = (float) (VERTEX_POINTER.size > 2) ? *(ptr++) : 0;
 
-    mat_load(&MODELVIEW_STACK.top().m);
-    mat_trans_single(vout.x, vout.y, vout.z);
+    auto& mv = RENDER_TRANSFORM.m;
 
-    printf("%f %f %f\n", MODELVIEW_STACK.top().m[3][0], MODELVIEW_STACK.top().m[3][1], MODELVIEW_STACK.top().m[3][2]);
-    printf("%f %f %f\n", vout.x, vout.y, vout.z);
+    vout.x = x * mv[0][0] + y * mv[1][0] + z * mv[2][0] + mv[3][0];
+    vout.y = x * mv[0][1] + y * mv[1][1] + z * mv[2][1] + mv[3][1];
+    vout.z = x * mv[0][2] + y * mv[1][2] + z * mv[2][2] + mv[3][2];
 }
 
 template<typename T>
@@ -430,8 +477,6 @@ GLAPI void APIENTRY glDrawArrays(GLenum mode, GLint first, GLsizei count) {
         _push_multitexture_header();
     }
 
-    mat_load(&MODELVIEW_STACK.top().m);
-
     void (*vertex_func) (pvr_vertex_t&, uint32_t) = nullptr;
 
     switch(VERTEX_POINTER.type) {
@@ -443,9 +488,13 @@ GLAPI void APIENTRY glDrawArrays(GLenum mode, GLint first, GLsizei count) {
         vertex_func = vertex_noop;
     }
 
+    /* Concatenate all the matrices for the final vertex -> screenspace transform */
+    _prepare_render_matrix();
+
     for(auto i = first; i < first + count; ++i) {
         pvr_vertex_t vert;
         vertex_func(vert, i);
+
         CURRENT_LIST->push_back(reinterpret_cast<const PVRCommand&>(vert));
         /*
         if(_multitexture_coords_enabled()) {

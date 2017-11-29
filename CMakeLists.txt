@@ -7,6 +7,7 @@ SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c99")
 ADD_LIBRARY(
     GL
     src/gl.cpp
+    src/glu.cpp
 )
 
 ADD_EXECUTABLE(

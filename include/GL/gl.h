@@ -84,6 +84,9 @@ GLAPI void APIENTRY glEnd();
 #define GL_DEPTH_BUFFER_BIT     0x00000100 /* Not implemented */
 GLAPI void APIENTRY glClear(GLuint mode);
 
+/* Viewport */
+GLAPI void APIENTRY glViewport(GLint x, GLint y, GLsizei width, GLsizei height);
+
 /* Matrix stacks */
 GLAPI void APIENTRY glMatrixMode(GLenum mode);
 GLAPI void APIENTRY glLoadIdentity();

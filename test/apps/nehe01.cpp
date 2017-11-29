@@ -1,8 +1,17 @@
 #include "../../include/GL/gl.h"
+#include "../../include/GL/glu.h"
 
 
 int main(int argc, char* argv[]) {
     glInitContextDC();
+
+    glViewport(0, 0, 640, 480);
+    glMatrixMode(GL_PROJECTION);
+
+    gluPerspective(45.0f, GLfloat(640) / GLfloat(480), 0.1, 100.0f);
+
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
 
     for(;;) {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);

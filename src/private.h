@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <stack>
+#include <cstring>
 #include <dc/matrix3d.h>
 
 /* Internal shared state and functions */
